@@ -1,0 +1,197 @@
+{
+  "name": "Copiloto de Soporte - Jira, Confluence y Gemini",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "value": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        240
+      ],
+      "id": "schedule-trigger",
+      "name": "Cada 5 Minutos"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{$env.ATLASSIAN_DOMAIN || 'baufest.atlassian.net'}}/rest/api/3/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jql\": \"project IN (PEUAS100, PESOL120, PEDYC600, PECMO120) AND created >= -5m\",\n  \"fields\": [\"summary\", \"description\", \"key\", \"project\"]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        240
+      ],
+      "id": "fetch-jira-tickets",
+      "name": "Buscar Tickets Recientes",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jira-credentials-id",
+          "name": "Jira Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "issues",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 1,
+      "position": [
+        440,
+        240
+      ],
+      "id": "split-tickets",
+      "name": "Procesar Uno a Uno"
+    },
+    {
+      "parameters": {
+        "url": "=https://{{$env.ATLASSIAN_DOMAIN || 'baufest.atlassian.net'}}/wiki/rest/api/content",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "spaceKey",
+              "value": "={{$json.fields.project.key}}"
+            },
+            {
+              "name": "expand",
+              "value": "body.storage"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        240
+      ],
+      "id": "fetch-confluence-docs",
+      "name": "Buscar Confluence por Proyecto",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jira-credentials-id",
+          "name": "Confluence Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{$env.GEMINI_API_KEY}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Procesa el siguiente ticket de Jira y documentación de Confluence usando la cadena de prompts:\\n\\nTicket: {{$node['split-tickets'].json.fields.summary}}\\nDescripción: {{$node['split-tickets'].json.fields.description || 'Sin descripción'}}\\n\\nDocumentación: {{$json.results?.[0]?.body?.storage?.value || 'Sin documentación registrada'}}\"\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        240
+      ],
+      "id": "gemini-prompt-chain",
+      "name": "Cerebro Gemini API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://baufest.webhook.office.com/webhookb2/...",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"{{$json.candidates[0].content.parts[0].text}}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        240
+      ],
+      "id": "send-to-teams",
+      "name": "Enviar a Teams"
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "fetch-jira-tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch-jira-tickets": {
+      "main": [
+        [
+          {
+            "node": "split-tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "split-tickets": {
+      "main": [
+        [
+          {
+            "node": "fetch-confluence-docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch-confluence-docs": {
+      "main": [
+        [
+          {
+            "node": "gemini-prompt-chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gemini-prompt-chain": {
+      "main": [
+        [
+          {
+            "node": "send-to-teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
